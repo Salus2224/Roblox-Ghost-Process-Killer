@@ -3,6 +3,7 @@
 
 #include <Windows.h>
 #include <tlhelp32.h>
+#include <Psapi.h>
 #include <iostream>
 #include <vector>
 
@@ -35,11 +36,12 @@ BOOL CALLBACK enumWindowsCallback(HWND handle, LPARAM lParam)
 int main()
 {
     HANDLE hndl = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPMODULE, 0);
+    HANDLE memInfo;
+    PROCESS_INFORMATION_CLASS pic = ProcessAppMemoryInfo;
     wstring name = L"RobloxPlayerBeta.exe"; // exe name (should be constant)
     wstring newname = L"";
+    APP_MEMORY_INFORMATION ami;
     vector<DWORD> pids; // store pids for later process execution
-
-    bool found = false;
 
     if (hndl) {
         PROCESSENTRY32  process = { sizeof(PROCESSENTRY32) };
@@ -47,31 +49,37 @@ int main()
         do {
             newname = process.szExeFile; // didn't want to learn to compare wchar* so I converted to wstring
             if (newname == name) {
-                pids.push_back(process.th32ProcessID); // add to list of PIDs to kill
 
-                window_data winData; // struct to pass PID, and recieve output
-                winData.pid = process.th32ProcessID;
-                winData.winName = L"Roblox";
-                EnumWindows(enumWindowsCallback, (LPARAM)(&winData)); // loop through windows
-                if (winData.hasWindow) {
-                    found = true;
-                    break; // if any of them have windows, we don't kill any
+                memInfo = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process.th32ProcessID);
+                
+                if (GetProcessInformation(memInfo, pic, &ami, sizeof(APP_MEMORY_INFORMATION))) {
+                    if (ami.PrivateCommitUsage > 100000000) { // more than 100mb of memory
+
+                        window_data winData; // struct to pass PID, and recieve output
+                        winData.pid = process.th32ProcessID;
+                        winData.winName = L"Roblox"; // or setwindowtitle() value
+                        EnumWindows(enumWindowsCallback, (LPARAM)(&winData)); // loop through windows
+
+                        if (!winData.hasWindow) {
+                            pids.push_back(process.th32ProcessID); // add to list of PIDs to kill
+                        }
+                    }
                 }
             }
         } while (Process32Next(hndl, &process));
 
         CloseHandle(hndl);
 
-        if (!found) {
+        if (pids.size()) {
             for (int i = 0; i < pids.size(); i++) { // iterate saved processes
                 const auto explorer = OpenProcess(PROCESS_TERMINATE, false, pids[i]); // kill
                 TerminateProcess(explorer, 1);
                 CloseHandle(explorer);
             }
-            cout << "KILLED: " << pids.size() / 2 << " DEAD PROCESS(ES)" << endl; // there are 2 processes for each instance, one foreground, one background
+            cout << "KILLED: " << pids.size() << " DEAD PROCESS(ES)" << endl;
         }
         else {
-            cout << "ROBLOX IS ALIVE" << endl;
+            cout << "NO DEAD PROCESSES FOUND" << endl;
         }
     }
 }
